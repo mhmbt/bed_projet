@@ -86,7 +86,7 @@ static void dump_message(char *buffer)
     printhex(buffer, PKTLEN);
     printf("\r\n  from node: 0x");
     printf("%02X\r\n", buffer[MSG_BYTE_NODE_ID]);
-
+    printf("destination : %02X\r\n", buffer[MSG_BYTE_DEST]); 
 
     if(buffer[MSG_BYTE_TYPE] == MSG_TYPE_TEMPERATURE)
     {
