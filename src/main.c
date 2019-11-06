@@ -51,7 +51,7 @@
 #define MSG_TYPE_ACK 0x03
 
 #define NODE_ID_LOCATION INFOD_START
-#define NODE_ID_VALUE 69
+#define NODE_ID_VALUE 69 
 
 #define NODE_ID_UNDEFINED 0x00
 /* 10 seconds to reply to an id request */
@@ -61,7 +61,7 @@
 static unsigned char node_id;
 
 // id MASTER statique 
-#define MASTER_ID 0x02
+#define MASTER_ID 0x01
 
 #define NUM_TIMERS 6
 static uint16_t timer[NUM_TIMERS];
@@ -88,7 +88,7 @@ static void dump_message(char *buffer)
     printhex(buffer, PKTLEN);
     printf("\r\n  from node: 0x");
     printf("%02X\r\n", buffer[MSG_BYTE_NODE_ID]);
-    printf("to destination : %02X\r\n", buffer[MSG_BYTE_DEST]); 
+    printf("  to destination : %02X\r\n", buffer[MSG_BYTE_DEST]); 
 
     if(buffer[MSG_BYTE_TYPE] == MSG_TYPE_TEMPERATURE)
     {
@@ -365,7 +365,7 @@ static PT_THREAD(thread_uart(struct pt *pt))
 
         led_green_blink(10); /* 10 timer ticks = 100 ms */
 
-	    set_node_id(NODE_ID_VALUE);
+	set_node_id(NODE_ID_VALUE);
         uart_flag = 0;
     }
 
@@ -462,7 +462,7 @@ int main(void)
     set_mcu_speed_dco_mclk_16MHz_smclk_8MHz();
 
     /* id init */
-    set_node_id(NODE_ID_VALUE);
+    set_node_id(NODE_ID_VALUE); 
 
     /* LEDs init */
     leds_init();
@@ -496,12 +496,16 @@ int main(void)
     cc2500_rx_register_cb(radio_cb);
     cc2500_rx_enter();
     radio_rx_flag = 0;
+
 #ifdef ANCHOR
     printf("ANCHOR RUNNING: \r\n");
 #endif
 #ifdef TAG
     printf("TAG RUNNING: \r\n");
 #endif
+#ifdef ROUTER
+    printf("ROUTER RUNNING \r\n"); 
+#endif 
     printf("node id retrieved from flash: %d\r\n", node_id);
     button_enable_interrupt();
     __enable_interrupt();
