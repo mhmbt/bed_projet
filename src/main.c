@@ -43,8 +43,8 @@
 #define PKTLEN 7
 /* 0u = 0 unsigned */ 
 #define MSG_BYTE_DEST 0U
-#define MSG_BYTE_TYPE 1U
-#define MSG_BYTE_NODE_ID 2U
+#define MSG_BYTE_TYPE 1U    //type du contenu du message : température ou ACK 
+#define MSG_BYTE_NODE_ID 2U    //id de la source 
 #define MSG_BYTE_CONTENT 3U
 #define MSG_TYPE_ID_REPLY 0x01
 #define MSG_TYPE_TEMPERATURE 0x02
@@ -59,8 +59,8 @@
 #define ID_INPUT_TIMEOUT_TICKS (ID_INPUT_TIMEOUT_SECONDS*1000/TIMER_PERIOD_MS)
 static unsigned char node_id;
 
-// static master ID 
-#define MASTER_ID 0x01
+// id MASTER statique 
+#define MASTER_ID 0x02
 
 #define NUM_TIMERS 6
 static uint16_t timer[NUM_TIMERS];
@@ -82,11 +82,12 @@ static void printhex(char *buffer, unsigned int len)
 
 static void dump_message(char *buffer)
 {
+    printf(" >>>>>> 0x%02X<<<<<<<<  \n", node_id); 
     printf("message received\r\n  content: ");
     printhex(buffer, PKTLEN);
     printf("\r\n  from node: 0x");
     printf("%02X\r\n", buffer[MSG_BYTE_NODE_ID]);
-    printf("destination : %02X\r\n", buffer[MSG_BYTE_DEST]); 
+    printf("to destination : %02X\r\n", buffer[MSG_BYTE_DEST]); 
 
     if(buffer[MSG_BYTE_TYPE] == MSG_TYPE_TEMPERATURE)
     {
@@ -95,6 +96,10 @@ static void dump_message(char *buffer)
         pt[0] = buffer[MSG_BYTE_CONTENT + 1];
         pt[1] = buffer[MSG_BYTE_CONTENT];
         printf("  temperature: %d\r\n", temperature);
+    }
+    if(buffer[MSG_BYTE_TYPE] == MSG_TYPE_ACK) 
+    {
+        printf("             ACK \n");  
     }
 
 }
@@ -240,7 +245,6 @@ void radio_cb(uint8_t *buffer, int size, int8_t rssi)
     cc2500_rx_enter();
 }
 
-
 static void radio_send_message()
 {
     cc2500_utx(radio_tx_buffer, PKTLEN);
@@ -249,6 +253,22 @@ static void radio_send_message()
     putchar('\r');
     putchar('\n');
     cc2500_rx_enter();
+}
+
+static void handle_message(char *buffer)
+{
+    // si ce message est bien destiné au noeud, répondre par un ACK 
+    if(buffer[MSG_BYTE_DEST] == node_id && buffer[MSG_BYTE_TYPE] == MSG_TYPE_TEMPERATURE){
+        send_ack(buffer[MSG_BYTE_NODE_ID] ); 
+    }
+    else if (buffer[MSG_BYTE_TYPE] == MSG_TYPE_ACK) 
+    {
+        printf("Ce message est un ACK\n") ;
+    }
+    else if(buffer[MSG_BYTE_DEST] != node_id) 
+    {
+        printf("Ce message ne m'est pas destiné.\n") ; 
+    }
 }
 
 static PT_THREAD(thread_process_msg(struct pt *pt))
@@ -260,6 +280,8 @@ static PT_THREAD(thread_process_msg(struct pt *pt))
         PT_WAIT_UNTIL(pt, radio_rx_flag == 1);
 
         dump_message(radio_rx_buffer);
+
+        handle_message(radio_rx_buffer); 
 
         radio_rx_flag = 0;
     }
@@ -321,6 +343,15 @@ static void send_id_reply(unsigned char id)
     radio_tx_buffer[MSG_BYTE_CONTENT] = id;
     radio_send_message();
     printf("ID 0x%02X sent\r\n", id);
+}
+
+void send_ack(unsigned char dest_id) 
+{
+    init_message(); 
+    radio_tx_buffer[MSG_BYTE_TYPE] = MSG_TYPE_ACK; 
+    radio_tx_buffer[MSG_BYTE_DEST] = dest_id;
+    radio_send_message(); 
+    printf("Sent ACK to 0x%02X \r\n", dest_id); 
 }
 
 static PT_THREAD(thread_uart(struct pt *pt))
@@ -465,6 +496,7 @@ int main(void)
 
     /* retrieve node id from flash */
     node_id = *((char *) NODE_ID_LOCATION);
+    node_id = 0x02 ; 
 #ifdef ANCHOR
     printf("ANCHOR RUNNING: \r\n");
 #endif
