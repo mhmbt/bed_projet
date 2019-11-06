@@ -475,7 +475,7 @@ static PT_THREAD(thread_periodic_broadcast(struct pt *pt))
     while(1) 
     {
         TIMER_RADIO_BROADCAST = 0; 
-        PT_WAIT_UNTIL(pt, timer_reached( TIMER_RADIO_BROADCAST, 1000)); 
+        PT_WAIT_UNTIL(pt, timer_reached( TIMER_RADIO_BROADCAST, 10000)); 
         send_router_id(); 
     }
     PT_END(pt) ; 
