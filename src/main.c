@@ -60,7 +60,7 @@
 static unsigned char node_id;
 
 // id MASTER statique 
-#define MASTER_ID 0x02
+#define MASTER_ID 0x01
 
 #define NUM_TIMERS 6
 static uint16_t timer[NUM_TIMERS];
@@ -87,7 +87,7 @@ static void dump_message(char *buffer)
     printhex(buffer, PKTLEN);
     printf("\r\n  from node: 0x");
     printf("%02X\r\n", buffer[MSG_BYTE_NODE_ID]);
-    printf("to destination : %02X\r\n", buffer[MSG_BYTE_DEST]); 
+    printf("  to destination : %02X\r\n", buffer[MSG_BYTE_DEST]); 
 
     if(buffer[MSG_BYTE_TYPE] == MSG_TYPE_TEMPERATURE)
     {
@@ -496,13 +496,23 @@ int main(void)
 
     /* retrieve node id from flash */
     node_id = *((char *) NODE_ID_LOCATION);
-    node_id = 0x02 ; 
+    
+
+    #ifdef ANCHOR 
+    node_id=0x01; 
+    #endif 
+    #ifdef TAG
+    node_id=0x04 ; 
+    #endif
 #ifdef ANCHOR
     printf("ANCHOR RUNNING: \r\n");
 #endif
 #ifdef TAG
     printf("TAG RUNNING: \r\n");
 #endif
+#ifdef ROUTER
+    printf("ROUTER RUNNING \r\n"); 
+#endif 
     printf("node id retrieved from flash: %d\r\n", node_id);
     button_enable_interrupt();
     __enable_interrupt();
