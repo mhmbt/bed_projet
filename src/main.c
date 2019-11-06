@@ -49,21 +49,22 @@
 #define MSG_TYPE_ID_REPLY 0x01
 #define MSG_TYPE_TEMPERATURE 0x02
 #define MSG_TYPE_ACK 0x03
+#define MSG_TYPE_IS_ROUTER 0x04 // type de message utilisé en broadcast : la valeur correspond à l'id du routeur. 
 
 #define NODE_ID_LOCATION INFOD_START
 #define NODE_ID_VALUE 69 
+#define BROADCAST_DEST 0x00      // valeur indiquée dans le champ "DEST" d'un message pour un broadcast.
 
-#define NODE_ID_UNDEFINED 0x00
 /* 10 seconds to reply to an id request */
 #define ID_INPUT_TIMEOUT_SECONDS 10
 /* the same in timer ticks */
 #define ID_INPUT_TIMEOUT_TICKS (ID_INPUT_TIMEOUT_SECONDS*1000/TIMER_PERIOD_MS)
 static unsigned char node_id;
+static unsigned char router_id; 
 
-// id MASTER statique 
-#define MASTER_ID 0x01
+#define ROUTER_ID 0x01
 
-#define NUM_TIMERS 6
+#define NUM_TIMERS 7
 static uint16_t timer[NUM_TIMERS];
 #define TIMER_LED_RED_ON timer[0]
 #define TIMER_LED_GREEN_ON timer[1]
@@ -71,6 +72,7 @@ static uint16_t timer[NUM_TIMERS];
 #define TIMER_RADIO_SEND timer[3]
 #define TIMER_ID_INPUT timer[4]
 #define TIMER_RADIO_FORWARD timer[5]
+#define TIMER_RADIO_BROADCAST timer[6] 
 
 static void printhex(char *buffer, unsigned int len)
 {
@@ -123,9 +125,21 @@ static void set_node_id(unsigned char id)
     printf("this node id is now 0x%02X\r\n", id);
 }
 
+/* met à jour l'id du routeur en local. Appelé lors de la réception d'un message de broadcast.*/
+static void set_router_id(unsigned char id)
+{
+    if(router_id != id){ 
+        router_id = id; 
+        printf("Changed router id : 0x%02X\r\n", router_id) ; 
+    }
+    else{
+        printf("router id unchanged \r\n"); 
+    }
+}
+
 /* Protothread contexts */
 
-#define NUM_PT 7
+#define NUM_PT 8
 static struct pt pt[NUM_PT];
 
 
@@ -262,6 +276,10 @@ static void handle_message(char *buffer)
     if(buffer[MSG_BYTE_DEST] == node_id && buffer[MSG_BYTE_TYPE] == MSG_TYPE_TEMPERATURE){
         send_ack(buffer[MSG_BYTE_NODE_ID] ); 
     }
+    // si le message est un broadcast (dest=0) et que le type est "IS_ROUTER" (advertise de l'id du routeur), mettre à jour l'id du routeur en local
+    if(buffer[MSG_BYTE_DEST] == BROADCAST_DEST && buffer[MSG_BYTE_TYPE] == MSG_TYPE_IS_ROUTER){
+        set_router_id(buffer[MSG_BYTE_NODE_ID]); 
+    }
     else if (buffer[MSG_BYTE_TYPE] == MSG_TYPE_ACK) 
     {
         printf("Ce message est un ACK\n") ;
@@ -321,7 +339,7 @@ static void send_temperature()
 {
     init_message();
     radio_tx_buffer[MSG_BYTE_TYPE] = MSG_TYPE_TEMPERATURE;
-    radio_tx_buffer[MSG_BYTE_DEST] = MASTER_ID ; 
+    radio_tx_buffer[MSG_BYTE_DEST] = router_id  ; 
     int temperature = adc10_sample_temp();
     printf("temperature: %d, hex: ", temperature);
     printhex((char *) &temperature, 2);
@@ -334,6 +352,15 @@ static void send_temperature()
     radio_send_message();
 }
 
+/* to be called by router to advertise its id */
+static void send_router_id()
+{
+    init_message();
+    radio_tx_buffer[MSG_BYTE_TYPE] = MSG_TYPE_IS_ROUTER;
+    radio_tx_buffer[MSG_BYTE_DEST] = BROADCAST_DEST; 
+    printf("Advertising router id \r\n");
+    radio_send_message();
+}
 
 // unused 
 //
@@ -433,13 +460,27 @@ static PT_THREAD(thread_periodic_send(struct pt *pt))
     while(1)
     {
         TIMER_RADIO_SEND = 0;
-        PT_WAIT_UNTIL(pt, node_id != NODE_ID_UNDEFINED && timer_reached( TIMER_RADIO_SEND, 1000));
+        PT_WAIT_UNTIL(pt, timer_reached( TIMER_RADIO_SEND, 1000));
         send_temperature();
     }
 
     PT_END(pt);
 }
 #endif
+
+#ifdef ROUTER 
+static PT_THREAD(thread_periodic_broadcast(struct pt *pt))
+{
+    PT_BEGIN(pt); 
+    while(1) 
+    {
+        TIMER_RADIO_BROADCAST = 0; 
+        PT_WAIT_UNTIL(pt, timer_reached( TIMER_RADIO_BROADCAST, 1000)); 
+        send_router_id(); 
+    }
+    PT_END(pt) ; 
+}
+#endif 
 
 /*
  * main
@@ -463,6 +504,7 @@ int main(void)
 
     /* id init */
     set_node_id(NODE_ID_VALUE); 
+    set_router_id(ROUTER_ID); 
 
     /* LEDs init */
     leds_init();
@@ -520,6 +562,9 @@ int main(void)
 #ifdef TAG
         thread_periodic_send(&pt[5]);
 #endif
-        thread_button(&pt[6]);
+#ifdef ROUTER 
+        thread_periodic_broadcast(&pt[6]); 
+#endif 
+        thread_button(&pt[7]);
     }
 }
