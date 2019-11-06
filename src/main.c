@@ -40,7 +40,7 @@
 /* 100 Hz timer A */
 #define TIMER_PERIOD_MS 10
 
-#define PKTLEN 7
+#define PKTLEN 21
 /* 0u = 0 unsigned */ 
 #define MSG_BYTE_DEST 0U
 #define MSG_BYTE_TYPE 1U    //type du contenu du message : température ou ACK 
@@ -49,9 +49,11 @@
 #define MSG_TYPE_ID_REPLY 0x01
 #define MSG_TYPE_TEMPERATURE 0x02
 #define MSG_TYPE_ACK 0x03
+#define MSG_TYPE_RESULTS 0x04
 
 #define NODE_ID_LOCATION INFOD_START
-#define NODE_ID_VALUE 69
+#define NODE_ID_VALUE 42
+#define ANCHOR_ID 1
 
 #define NODE_ID_UNDEFINED 0x00
 /* 10 seconds to reply to an id request */
@@ -63,7 +65,7 @@ static unsigned char node_id;
 // id MASTER statique 
 #define MASTER_ID 0x02
 
-#define NUM_TIMERS 6
+#define NUM_TIMERS 7
 static uint16_t timer[NUM_TIMERS];
 #define TIMER_LED_RED_ON timer[0]
 #define TIMER_LED_GREEN_ON timer[1]
@@ -71,6 +73,9 @@ static uint16_t timer[NUM_TIMERS];
 #define TIMER_RADIO_SEND timer[3]
 #define TIMER_ID_INPUT timer[4]
 #define TIMER_RADIO_FORWARD timer[5]
+#define TIMER_SEND_RESULTS timer[6]
+
+char** results[3][5];
 
 static void printhex(char *buffer, unsigned int len)
 {
@@ -87,16 +92,33 @@ static void dump_message(char *buffer)
     printf("message received\r\n  content: ");
     printhex(buffer, PKTLEN);
     printf("\r\n  from node: 0x");
-    printf("%02X\r\n", buffer[MSG_BYTE_NODE_ID]);
+    unsigned char source_id = buffer[MSG_BYTE_NODE_ID];
+    printf("%02X\r\n", source_id);
     printf("to destination : %02X\r\n", buffer[MSG_BYTE_DEST]); 
 
     if(buffer[MSG_BYTE_TYPE] == MSG_TYPE_TEMPERATURE)
     {
+        // if def LEADER
         unsigned int temperature;
         char *pt = (char *) &temperature;
         pt[0] = buffer[MSG_BYTE_CONTENT + 1];
         pt[1] = buffer[MSG_BYTE_CONTENT];
         printf("  temperature: %d\r\n", temperature);
+        unsigned int i;
+        unsigned int found = 0;
+        for(i=0; i<strlen(results[0]); i++) {
+            if(results[0][i] == source_id) {
+                found = 1;
+                break;
+            } else if(results[0][i] == 0) {
+                break;
+            }
+        }
+        if(!found) {
+            results[0][i] = source_id;
+        }
+        results[1][i] = pt[0];
+        results[2][i] = pt[1];
     }
     if(buffer[MSG_BYTE_TYPE] == MSG_TYPE_ACK) 
     {
@@ -253,14 +275,16 @@ static void radio_send_message()
     printhex(radio_tx_buffer, PKTLEN);
     putchar('\r');
     putchar('\n');
+    printf("\tto 0x%02X\n", radio_tx_buffer[MSG_BYTE_DEST]);
     cc2500_rx_enter();
 }
 
 static void handle_message(char *buffer)
 {
     // si ce message est bien destiné au noeud, répondre par un ACK 
-    if(buffer[MSG_BYTE_DEST] == node_id && buffer[MSG_BYTE_TYPE] == MSG_TYPE_TEMPERATURE){
-        send_ack(buffer[MSG_BYTE_NODE_ID] ); 
+    if(buffer[MSG_BYTE_DEST] == node_id){
+        dump_message(buffer);
+        send_ack(buffer[MSG_BYTE_NODE_ID]);
     }
     else if (buffer[MSG_BYTE_TYPE] == MSG_TYPE_ACK) 
     {
@@ -279,8 +303,6 @@ static PT_THREAD(thread_process_msg(struct pt *pt))
     while(1)
     {
         PT_WAIT_UNTIL(pt, radio_rx_flag == 1);
-
-        dump_message(radio_rx_buffer);
 
         handle_message(radio_rx_buffer); 
 
@@ -355,6 +377,27 @@ void send_ack(unsigned char dest_id)
     printf("Sent ACK to 0x%02X \r\n", dest_id); 
 }
 
+void send_results(unsigned char dest_id)
+{
+    init_message(); 
+    radio_tx_buffer[MSG_BYTE_TYPE] = MSG_TYPE_RESULTS;
+    radio_tx_buffer[MSG_BYTE_DEST] = dest_id;
+    unsigned int i;
+    unsigned int num_nodes = 0;
+    for(i=0; i<strlen(results[0]); i++) {
+        if(results[0][i] != 0) {
+            num_nodes++;
+        }
+        radio_tx_buffer[1 + MSG_BYTE_CONTENT + 4*i] = results[0][i];
+        radio_tx_buffer[1 + MSG_BYTE_CONTENT + 4*i + 1] = results[1][i];
+        radio_tx_buffer[1 + MSG_BYTE_CONTENT + 4*i + 2] = results[2][i];
+        radio_tx_buffer[1 + MSG_BYTE_CONTENT + 4*i + 3] = ',';
+    }
+    radio_tx_buffer[MSG_BYTE_CONTENT] = num_nodes;
+    radio_send_message();
+    printf("Sent results to 0x%02X \r\n", dest_id);
+}
+
 static PT_THREAD(thread_uart(struct pt *pt))
 {
     PT_BEGIN(pt);
@@ -426,7 +469,7 @@ static PT_THREAD(thread_antibouncing(struct pt *pt))
 }
 
 #ifdef TAG
-static PT_THREAD(thread_periodic_send(struct pt *pt))
+static PT_THREAD(thread_send_temperature(struct pt *pt))
 {
     PT_BEGIN(pt);
 
@@ -440,6 +483,22 @@ static PT_THREAD(thread_periodic_send(struct pt *pt))
     PT_END(pt);
 }
 #endif
+
+static PT_THREAD(thread_send_results(struct pt *pt))
+{
+    PT_BEGIN(pt);
+
+    while(1)
+    {
+        memset(results, 0, sizeof results[0]);
+        memset(results, 0, sizeof results[1]);
+        TIMER_SEND_RESULTS = 0;
+        PT_WAIT_UNTIL(pt, node_id != NODE_ID_UNDEFINED && timer_reached(TIMER_SEND_RESULTS, 2000));
+        send_results(ANCHOR_ID);
+    }
+
+    PT_END(pt);
+}
 
 /*
  * main
@@ -514,8 +573,11 @@ int main(void)
         thread_antibouncing(&pt[3]);
         thread_process_msg(&pt[4]);
 #ifdef TAG
-        thread_periodic_send(&pt[5]);
+        //thread_send_temperature(&pt[5]);
 #endif
-        thread_button(&pt[6]);
+//if def LEADER
+        thread_send_results(&pt[6]);
+//endif
+        thread_button(&pt[7]);
     }
 }
