@@ -1,6 +1,6 @@
 /**
  *  \file   main.c
- *  \brief  eZ430-RF2500 demo radio, protothread
+ *  \brief  eZ430-RF2500 radio communication demo
  *  \author Antoine Fraboulet, Tanguy Risset, Dominique Tournier
  *  \date   2009
  **/
@@ -41,16 +41,17 @@
 #define TIMER_PERIOD_MS 10
 
 #define PKTLEN 7
-#define MAX_HOPS 3
-#define MSG_BYTE_TYPE 0U
-#define MSG_BYTE_HOPS 1U
-#define MSG_BYTE_SRC_ROUTE 2U
-#define MSG_BYTE_CONTENT (MAX_HOPS + 2)
-#define MSG_TYPE_ID_REQUEST 0x00
+/* 0u = 0 unsigned */ 
+#define MSG_BYTE_DEST 0U
+#define MSG_BYTE_TYPE 1U    //type du contenu du message : température ou ACK 
+#define MSG_BYTE_NODE_ID 2U    //id de la source 
+#define MSG_BYTE_CONTENT 3U
 #define MSG_TYPE_ID_REPLY 0x01
 #define MSG_TYPE_TEMPERATURE 0x02
+#define MSG_TYPE_ACK 0x03
 
 #define NODE_ID_LOCATION INFOD_START
+#define NODE_ID_VALUE 69
 
 #define NODE_ID_UNDEFINED 0x00
 /* 10 seconds to reply to an id request */
@@ -58,6 +59,9 @@
 /* the same in timer ticks */
 #define ID_INPUT_TIMEOUT_TICKS (ID_INPUT_TIMEOUT_SECONDS*1000/TIMER_PERIOD_MS)
 static unsigned char node_id;
+
+// id MASTER statique 
+#define MASTER_ID 0x01
 
 #define NUM_TIMERS 6
 static uint16_t timer[NUM_TIMERS];
@@ -79,10 +83,32 @@ static void printhex(char *buffer, unsigned int len)
 
 static void dump_message(char *buffer)
 {
+    printf(" >>>>>> 0x%02X<<<<<<<<  \n", node_id); 
     printf("message received\r\n  content: ");
     printhex(buffer, PKTLEN);
+    printf("\r\n  from node: 0x");
+    printf("%02X\r\n", buffer[MSG_BYTE_NODE_ID]);
+    printf("  to destination : %02X\r\n", buffer[MSG_BYTE_DEST]); 
+
+    if(buffer[MSG_BYTE_TYPE] == MSG_TYPE_TEMPERATURE)
+    {
+        unsigned int temperature;
+        char *pt = (char *) &temperature;
+        pt[0] = buffer[MSG_BYTE_CONTENT + 1];
+        pt[1] = buffer[MSG_BYTE_CONTENT];
+        printf("  temperature: %d\r\n", temperature);
+    }
+    if(buffer[MSG_BYTE_TYPE] == MSG_TYPE_ACK) 
+    {
+        printf("             ACK \n");  
+    }
+
 }
 
+static void prompt_node_id()
+{
+    printf("A node requested an id. You have %d seconds to enter an 8-bit ID.\r\n", ID_INPUT_TIMEOUT_SECONDS);
+}
 
 /* returns 1 if the id was expected and set, 0 otherwise */
 static void set_node_id(unsigned char id)
@@ -220,7 +246,6 @@ void radio_cb(uint8_t *buffer, int size, int8_t rssi)
     cc2500_rx_enter();
 }
 
-
 static void radio_send_message()
 {
     cc2500_utx(radio_tx_buffer, PKTLEN);
@@ -231,21 +256,35 @@ static void radio_send_message()
     cc2500_rx_enter();
 }
 
-static PT_THREAD(thread_receive(struct pt *pt))
+static void handle_message(char *buffer)
+{
+    // si ce message est bien destiné au noeud, répondre par un ACK 
+    if(buffer[MSG_BYTE_DEST] == node_id && buffer[MSG_BYTE_TYPE] == MSG_TYPE_TEMPERATURE){
+        send_ack(buffer[MSG_BYTE_NODE_ID] ); 
+    }
+    else if (buffer[MSG_BYTE_TYPE] == MSG_TYPE_ACK) 
+    {
+        printf("Ce message est un ACK\n") ;
+    }
+    else if(buffer[MSG_BYTE_DEST] != node_id) 
+    {
+        printf("Ce message ne m'est pas destiné.\n") ; 
+    }
+}
+
+static PT_THREAD(thread_process_msg(struct pt *pt))
 {
     PT_BEGIN(pt);
 
     while(1)
     {
         PT_WAIT_UNTIL(pt, radio_rx_flag == 1);
-	printf("sent: ");
-	printhex(radio_tx_buffer, PKTLEN);
-	putchar('\r');
-	putchar('\n');
 
         dump_message(radio_rx_buffer);
-	radio_rx_flag = 0;
 
+        handle_message(radio_rx_buffer); 
+
+        radio_rx_flag = 0;
     }
 
     PT_END(pt);
@@ -274,16 +313,15 @@ static void init_message()
     {
         radio_tx_buffer[i] = 0x00;
     }
-    radio_tx_buffer[MSG_BYTE_HOPS] = 0x01;
-    radio_tx_buffer[MSG_BYTE_SRC_ROUTE] = node_id;
+    radio_tx_buffer[MSG_BYTE_NODE_ID] = node_id;
 }
 
 /* to be called from within a protothread */
-#ifdef TAG
 static void send_temperature()
 {
     init_message();
     radio_tx_buffer[MSG_BYTE_TYPE] = MSG_TYPE_TEMPERATURE;
+    radio_tx_buffer[MSG_BYTE_DEST] = MASTER_ID ; 
     int temperature = adc10_sample_temp();
     printf("temperature: %d, hex: ", temperature);
     printhex((char *) &temperature, 2);
@@ -295,16 +333,10 @@ static void send_temperature()
     radio_tx_buffer[MSG_BYTE_CONTENT + 1] = pt[0];
     radio_send_message();
 }
-#endif
-
-static void send_id_request()
-{
-    init_message();
-    radio_tx_buffer[MSG_BYTE_TYPE] = MSG_TYPE_ID_REQUEST;
-    radio_send_message();
-}
 
 
+// unused 
+//
 static void send_id_reply(unsigned char id)
 {
     init_message();
@@ -312,6 +344,15 @@ static void send_id_reply(unsigned char id)
     radio_tx_buffer[MSG_BYTE_CONTENT] = id;
     radio_send_message();
     printf("ID 0x%02X sent\r\n", id);
+}
+
+void send_ack(unsigned char dest_id) 
+{
+    init_message(); 
+    radio_tx_buffer[MSG_BYTE_TYPE] = MSG_TYPE_ACK; 
+    radio_tx_buffer[MSG_BYTE_DEST] = dest_id;
+    radio_send_message(); 
+    printf("Sent ACK to 0x%02X \r\n", dest_id); 
 }
 
 static PT_THREAD(thread_uart(struct pt *pt))
@@ -324,21 +365,16 @@ static PT_THREAD(thread_uart(struct pt *pt))
 
         led_green_blink(10); /* 10 timer ticks = 100 ms */
 
-        /* does the local node expects an id
-         * or do we have to broadcast it? */
-        if(timer_reached(TIMER_ID_INPUT, ID_INPUT_TIMEOUT_TICKS))
-        {
-            send_id_reply(uart_data);
-        }
-        else
-        {
-            set_node_id(uart_data);
-        }
+	    set_node_id(NODE_ID_VALUE);
         uart_flag = 0;
     }
 
     PT_END(pt);
 }
+
+/*
+ * Button
+ */
 
 #define ANTIBOUNCING_DURATION 10 /* 10 timer counts = 100 ms */
 static int antibouncing_flag;
@@ -367,7 +403,6 @@ static PT_THREAD(thread_button(struct pt *pt))
 
         /* ask locally for a node id and broadcast an id request */
         prompt_node_id();
-        send_id_request();
 
         button_pressed_flag = 0;
     }
@@ -381,7 +416,7 @@ static PT_THREAD(thread_antibouncing(struct pt *pt))
     PT_BEGIN(pt);
 
     while(1)
-    {
+      {
         PT_WAIT_UNTIL(pt, antibouncing_flag
           && timer_reached(TIMER_ANTIBOUNCING, ANTIBOUNCING_DURATION));
         antibouncing_flag = 0;
@@ -389,7 +424,6 @@ static PT_THREAD(thread_antibouncing(struct pt *pt))
 
     PT_END(pt);
 }
-
 
 #ifdef TAG
 static PT_THREAD(thread_periodic_send(struct pt *pt))
@@ -416,7 +450,6 @@ int main(void)
     watchdog_stop();
 
     TIMER_ID_INPUT = UINT_MAX;
-    node_id = NODE_ID_UNDEFINED;
 
     /* protothreads init */
     int i;
@@ -428,6 +461,9 @@ int main(void)
     /* clock init */
     set_mcu_speed_dco_mclk_16MHz_smclk_8MHz();
 
+    /* id init */
+    set_node_id(NODE_ID_VALUE);
+
     /* LEDs init */
     leds_init();
     led_red_on();
@@ -437,7 +473,6 @@ int main(void)
     timerA_init();
     timerA_register_cb(&timer_tick_cb);
     timerA_start_milliseconds(TIMER_PERIOD_MS);
-
 
     /* button init */
     button_init();
@@ -461,11 +496,31 @@ int main(void)
     cc2500_rx_register_cb(radio_cb);
     cc2500_rx_enter();
     radio_rx_flag = 0;
+<<<<<<< HEAD
+=======
 
     /* retrieve node id from flash */
     node_id = *((char *) NODE_ID_LOCATION);
-    printf("node id retrieved from flash: %d\r\n", node_id);
+    
 
+    #ifdef ANCHOR 
+    node_id=0x01; 
+    #endif 
+    #ifdef TAG
+    node_id=0x04 ; 
+    #endif
+>>>>>>> router
+#ifdef ANCHOR
+    printf("ANCHOR RUNNING: \r\n");
+#endif
+#ifdef TAG
+    printf("TAG RUNNING: \r\n");
+#endif
+#ifdef ROUTER
+    printf("ROUTER RUNNING \r\n"); 
+#endif 
+    printf("node id retrieved from flash: %d\r\n", node_id);
+    button_enable_interrupt();
     __enable_interrupt();
 
     /* simple cycle scheduling */
@@ -474,9 +529,7 @@ int main(void)
         thread_led_green(&pt[1]);
         thread_uart(&pt[2]);
         thread_antibouncing(&pt[3]);
-#ifdef ANCHOR
-        thread_receive(&pt[4]);
-#endif
+        thread_process_msg(&pt[4]);
 #ifdef TAG
         thread_periodic_send(&pt[5]);
 #endif
