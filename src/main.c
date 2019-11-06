@@ -51,6 +51,7 @@
 #define MSG_TYPE_ACK 0x03
 
 #define NODE_ID_LOCATION INFOD_START
+#define NODE_ID_VALUE 69
 
 #define NODE_ID_UNDEFINED 0x00
 /* 10 seconds to reply to an id request */
@@ -364,7 +365,7 @@ static PT_THREAD(thread_uart(struct pt *pt))
 
         led_green_blink(10); /* 10 timer ticks = 100 ms */
 
-	set_node_id(uart_data);
+	    set_node_id(NODE_ID_VALUE);
         uart_flag = 0;
     }
 
@@ -449,7 +450,6 @@ int main(void)
     watchdog_stop();
 
     TIMER_ID_INPUT = UINT_MAX;
-    node_id = NODE_ID_UNDEFINED;
 
     /* protothreads init */
     int i;
@@ -460,6 +460,9 @@ int main(void)
 
     /* clock init */
     set_mcu_speed_dco_mclk_16MHz_smclk_8MHz();
+
+    /* id init */
+    set_node_id(NODE_ID_VALUE);
 
     /* LEDs init */
     leds_init();
@@ -493,10 +496,6 @@ int main(void)
     cc2500_rx_register_cb(radio_cb);
     cc2500_rx_enter();
     radio_rx_flag = 0;
-
-    /* retrieve node id from flash */
-    node_id = *((char *) NODE_ID_LOCATION);
-    node_id = 0x02 ; 
 #ifdef ANCHOR
     printf("ANCHOR RUNNING: \r\n");
 #endif
