@@ -54,7 +54,7 @@
 #define BROADCAST_DEST 0x00      // valeur indiquée dans le champ "DEST" d'un message pour un broadcast.
 
 #define NODE_ID_LOCATION INFOD_START
-#define NODE_ID_VALUE 42
+#define NODE_ID_VALUE 1
 #define ANCHOR_ID 1
 #define NODE_ID_UNDEFINED 0x00
 
@@ -99,29 +99,32 @@ static void dump_message(char *buffer)
     printf("%02X\r\n", source_id);
     printf("  to destination : %02X\r\n", buffer[MSG_BYTE_DEST]);
 
-    if(buffer[MSG_BYTE_TYPE] == MSG_TYPE_TEMPERATURE)
-    {
-        unsigned int temperature;
-        char *pt = (char *) &temperature;
-        pt[0] = buffer[MSG_BYTE_CONTENT + 1];
-        pt[1] = buffer[MSG_BYTE_CONTENT];
-        printf("  temperature: %d\r\n", temperature);
-        unsigned int i;
-        unsigned int found = 0;
-        for(i=0; i<strlen(results[0]); i++) {
-            if(results[0][i] == source_id) {
-                found = 1;
-                break;
-            } else if(results[0][i] == 0) {
-                break;
+    #ifdef ROUTER
+        if(buffer[MSG_BYTE_TYPE] == MSG_TYPE_TEMPERATURE)
+        {
+            unsigned int temperature;
+            char *pt = (char *) &temperature;
+            pt[0] = buffer[MSG_BYTE_CONTENT + 1];
+            pt[1] = buffer[MSG_BYTE_CONTENT];
+            printf("  temperature: %d\r\n", temperature);
+            unsigned int i;
+            unsigned int found = 0;
+            for(i=0; i<strlen(results[0]); i++) {
+                if(results[0][i] == source_id) {
+                    found = 1;
+                    break;
+                } else if(results[0][i] == 0) {
+                    break;
+                }
             }
+            if(!found) {
+                results[0][i] = source_id;
+            }
+            results[1][i] = pt[0];
+            results[2][i] = pt[1];
         }
-        if(!found) {
-            results[0][i] = source_id;
-        }
-        results[1][i] = pt[0];
-        results[2][i] = pt[1];
-    }
+    #endif
+
     if(buffer[MSG_BYTE_TYPE] == MSG_TYPE_ACK) 
     {
         printf("             ACK \n");  
@@ -292,60 +295,56 @@ static void radio_send_message()
     cc2500_rx_enter();
 }
 
-static float return_average(char *buffer) 
+static int return_average(char *buffer) 
 {
-    char *temp_buffer = buffer[MSG_BYTE_CONTENT]; 
-    float average = 0; 
-    unsigned int temperature = 0;
-    char *pt = &temperature; 
-    int nb_nodes = (int)temp_buffer[0]; 
-    printf("nb_nodes : %d \r\n", nb_nodes); 
-    int i=2; 
-    for(i=2 ; i< nb_nodes*4 + 1; i=i+4)
+    int num_nodes = (int) buffer[MSG_BYTE_CONTENT];
+    printf("Number of nodes: %d\n", num_nodes);
+    int average = 0;
+    unsigned int temperature;
+    char *pt = (char *) &temperature;
+    int i; 
+    for(i=MSG_BYTE_CONTENT+2; i < MSG_BYTE_CONTENT+num_nodes*4 + 1; i=i+4)
     {
-        pt[0] = temp_buffer[i+1]; 
-        pt[1] = buffer[i]; 
-        printf(" id %02X : %02X\r\n", temp_buffer[i-1], temperature) ; 
+        pt[0] = buffer[i+1];
+        pt[1] = buffer[i];
+        printf(" id %02X : %d\r\n", buffer[i-1], temperature) ; 
         average += temperature; 
     }
-    average = average / nb_nodes; 
+    average = (int) (average / num_nodes);
 
     return average; 
 }
 
 static void print_average(char *buffer)
 {
-    float average = return_average(buffer); 
-    printf("Temperature : %f " , average) ;
+    int average = return_average(buffer);
+    printf("Average temperature : %d\n", average);
 }
 
 
 static void handle_message(char *buffer)
 {
     // si ce message est bien destiné au noeud, répondre par un ACK 
-    if(buffer[MSG_BYTE_DEST] == node_id){
-        #ifdef ROUTER
-            dump_message(buffer);
-        #endif
+    if(buffer[MSG_BYTE_DEST] == node_id) {
+        dump_message(buffer);
         send_ack(buffer[MSG_BYTE_NODE_ID]);
-    }
-    // si ce message est bien destiné au noeud et est de type "TYPE_RESULTS" (du routeur vers le anchor uniquement)
-    if(buffer[MSG_BYTE_DEST] == node_id && buffer[MSG_BYTE_TYPE] == MSG_TYPE_RESULTS){
-        send_ack(buffer[MSG_BYTE_NODE_ID] ); 
-        print_average(buffer); 
+        // si ce message est de type "TYPE_RESULTS" (du routeur vers le anchor uniquement)
+        if(buffer[MSG_BYTE_TYPE] == MSG_TYPE_RESULTS) {
+            print_average(buffer);
+        }
     }
 
     // si le message est un broadcast (dest=0) et que le type est "IS_ROUTER" (advertise de l'id du routeur), mettre à jour l'id du routeur en local
-    if(buffer[MSG_BYTE_DEST] == BROADCAST_DEST && buffer[MSG_BYTE_TYPE] == MSG_TYPE_IS_ROUTER){
+    if(buffer[MSG_BYTE_DEST] == BROADCAST_DEST && buffer[MSG_BYTE_TYPE] == MSG_TYPE_IS_ROUTER) {
         set_router_id(buffer[MSG_BYTE_NODE_ID]); 
     }
-    if (buffer[MSG_BYTE_TYPE] == MSG_TYPE_ACK) 
-    {
-        printf("Ce message est un ACK\n") ;
+
+    if (buffer[MSG_BYTE_TYPE] == MSG_TYPE_ACK) {
+        printf("This is an ACK\n") ;
     }
-    if(buffer[MSG_BYTE_DEST] != node_id) 
-    {
-        printf("Ce message ne m'est pas destiné.\n") ; 
+
+    if(buffer[MSG_BYTE_DEST] != node_id) {
+        printf("This message is not for me.\n") ; 
     }
 }
 
@@ -446,9 +445,11 @@ void send_results(unsigned char dest_id)
     radio_tx_buffer[MSG_BYTE_DEST] = dest_id;
     unsigned int i;
     unsigned int num_nodes = 0;
-    for(i=0; i<strlen(results[0]); i++) {
+    for(i=0; i<sizeof results[0]; i++) {
         if(results[0][i] != 0) {
             num_nodes++;
+        } else {
+            break;
         }
         radio_tx_buffer[1 + MSG_BYTE_CONTENT + 4*i] = results[0][i];
         radio_tx_buffer[1 + MSG_BYTE_CONTENT + 4*i + 1] = results[1][i];
