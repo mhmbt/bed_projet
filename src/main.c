@@ -49,8 +49,8 @@
 #define MSG_TYPE_ID_REPLY 0x01
 #define MSG_TYPE_TEMPERATURE 0x02
 #define MSG_TYPE_ACK 0x03
-#define MSG_TYPE_RESULTS 0x04
-#define MSG_TYPE_IS_ROUTER 0x04 // type de message utilisé en broadcast : la valeur correspond à l'id du routeur. 
+#define MSG_TYPE_IS_ROUTER 0x05 // type de message utilisé en broadcast : la valeur correspond à l'id du routeur. 
+#define MSG_TYPE_RESULTS 0x04  // tpye de message utilisé entre le routeur et le anchor, pour envoyer les résultats agglomérés
 #define BROADCAST_DEST 0x00      // valeur indiquée dans le champ "DEST" d'un message pour un broadcast.
 
 #define NODE_ID_LOCATION INFOD_START
@@ -126,7 +126,6 @@ static void dump_message(char *buffer)
     {
         printf("             ACK \n");  
     }
-
 }
 
 static void prompt_node_id()
@@ -293,6 +292,34 @@ static void radio_send_message()
     cc2500_rx_enter();
 }
 
+static float return_average(char *buffer) 
+{
+    char *temp_buffer = buffer[MSG_BYTE_CONTENT]; 
+    float average = 0; 
+    unsigned int temperature = 0;
+    char *pt = &temperature; 
+    int nb_nodes = (int)temp_buffer[0]; 
+    printf("nb_nodes : %d \r\n", nb_nodes); 
+    int i=2; 
+    for(i=2 ; i< nb_nodes*4 + 1; i=i+4)
+    {
+        pt[0] = temp_buffer[i+1]; 
+        pt[1] = buffer[i]; 
+        printf(" id %02X : %02X\r\n", temp_buffer[i-1], temperature) ; 
+        average += temperature; 
+    }
+    average = average / nb_nodes; 
+
+    return average; 
+}
+
+static void print_average(char *buffer)
+{
+    float average = return_average(buffer); 
+    printf("Temperature : %f " , average) ;
+}
+
+
 static void handle_message(char *buffer)
 {
     // si ce message est bien destiné au noeud, répondre par un ACK 
@@ -302,15 +329,21 @@ static void handle_message(char *buffer)
         #endif
         send_ack(buffer[MSG_BYTE_NODE_ID]);
     }
+    // si ce message est bien destiné au noeud et est de type "TYPE_RESULTS" (du routeur vers le anchor uniquement)
+    if(buffer[MSG_BYTE_DEST] == node_id && buffer[MSG_BYTE_TYPE] == MSG_TYPE_RESULTS){
+        send_ack(buffer[MSG_BYTE_NODE_ID] ); 
+        print_average(buffer); 
+    }
+
     // si le message est un broadcast (dest=0) et que le type est "IS_ROUTER" (advertise de l'id du routeur), mettre à jour l'id du routeur en local
     if(buffer[MSG_BYTE_DEST] == BROADCAST_DEST && buffer[MSG_BYTE_TYPE] == MSG_TYPE_IS_ROUTER){
         set_router_id(buffer[MSG_BYTE_NODE_ID]); 
     }
-    else if (buffer[MSG_BYTE_TYPE] == MSG_TYPE_ACK) 
+    if (buffer[MSG_BYTE_TYPE] == MSG_TYPE_ACK) 
     {
         printf("Ce message est un ACK\n") ;
     }
-    else if(buffer[MSG_BYTE_DEST] != node_id) 
+    if(buffer[MSG_BYTE_DEST] != node_id) 
     {
         printf("Ce message ne m'est pas destiné.\n") ; 
     }
