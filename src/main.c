@@ -65,7 +65,7 @@
 static unsigned char node_id;
 static unsigned char router_id; 
 
-#define ROUTER_ID 0x01
+#define ROUTER_ID 0x02
 
 #define NUM_TIMERS 8
 static uint16_t timer[NUM_TIMERS];
