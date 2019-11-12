@@ -54,7 +54,7 @@
 
 
 #define NODE_ID_LOCATION INFOD_START
-#define NODE_ID_VALUE 1
+#define NODE_ID_VALUE 51
 #define BROADCAST_DEST 0x00      // valeur indiquée dans le champ "DEST" d'un message pour un broadcast.
 
 /* 10 seconds to reply to an id request */
